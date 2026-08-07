@@ -36,6 +36,8 @@ ci_timeout: "168h"
 
 step_quiet_warning: "10m"
 
+step_stall_timeout: "15m"
+
 daemon_connect_timeout: "3s"
 
 log_level: info
@@ -254,6 +256,19 @@ This is observability only.
 It does not cancel the step, change auto-fix behavior, or mark the run failed.
 AXI renders the quiet signal in the `active_steps` table as part of `last_activity`, for example `quiet 12m3s ago: codex started pid=4242`.
 For older active runs that do not yet have activity rows, AXI falls back to the step log file's modification time.
+
+### step_stall_timeout
+
+Maximum quiet interval before the daemon fails a step whose native agent has already exited, or whose agent process never became observable, without returning control to the executor.
+
+|         |                        |
+| ------- | ---------------------- |
+| Type    | `string` (Go duration) |
+| Default | `15m`                  |
+
+Accepts any positive Go `time.ParseDuration` string. This is a completion-handoff backstop, not a general execution timeout: a native agent that is still reported as running is not cancelled just because it is quiet. The failure records the step, time since activity, and observed agent-process state so the run can be retried instead of remaining `running` indefinitely. Raise it for unusually slow agent startup or completion handoffs.
+
+`step_quiet_warning` remains observability-only; changing it does not change this watchdog.
 
 ### daemon_connect_timeout
 

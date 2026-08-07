@@ -37,6 +37,11 @@ const (
 	// DefaultStepQuietWarning is how long a running/fixing step can go without
 	// a new log or lifecycle activity before AXI status marks it quiet.
 	DefaultStepQuietWarning = 10 * time.Minute
+	// DefaultStepStallTimeout is the backstop for a step whose native agent has
+	// exited (or never became observable) without returning control to the
+	// executor. It is intentionally longer than the quiet warning because
+	// quiet is only an observability hint, not a cancellation signal.
+	DefaultStepStallTimeout = 15 * time.Minute
 	// DefaultDaemonConnectTimeout bounds client IPC connection attempts to a
 	// daemon socket that exists but is not accepting connections.
 	DefaultDaemonConnectTimeout = 3 * time.Second
@@ -70,6 +75,7 @@ type GlobalConfig struct {
 	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
 	CITimeout            time.Duration       `yaml:"-"`
 	StepQuietWarning     time.Duration       `yaml:"-"`
+	StepStallTimeout     time.Duration       `yaml:"-"`
 	DaemonConnectTimeout time.Duration       `yaml:"-"`
 	LogLevel             string              `yaml:"log_level"`
 	// SessionReuse controls per-run agent session reuse in the review loop:
@@ -100,6 +106,7 @@ type globalConfigRaw struct {
 	DaemonConnectTimeout string              `yaml:"daemon_connect_timeout"`
 	BabysitTimeout       string              `yaml:"babysit_timeout"`
 	StepQuietWarning     string              `yaml:"step_quiet_warning"`
+	StepStallTimeout     string              `yaml:"step_stall_timeout"`
 	LogLevel             string              `yaml:"log_level"`
 	SessionReuse         *bool               `yaml:"session_reuse"`
 	AutoFix              AutoFixRaw          `yaml:"auto_fix"`
@@ -382,6 +389,7 @@ type Config struct {
 	AgentArgsOverride    map[string][]string
 	CITimeout            time.Duration
 	StepQuietWarning     time.Duration
+	StepStallTimeout     time.Duration
 	LogLevel             string
 	SessionReuse         bool
 	Commands             Commands
@@ -574,6 +582,13 @@ ci_timeout: "168h"
 # agent lifecycle activity has appeared for this long. This is observability
 # only; it never cancels work.
 step_quiet_warning: "10m"
+
+# Fail a step when its native agent has exited (or never became observable) but
+# the step did not return control to the executor. This is a liveness backstop,
+# not a general execution timeout: an agent that is still running is never
+# cancelled by this setting. Raise it on a machine where agent startup or
+# completion handoff legitimately takes longer.
+step_stall_timeout: "15m"
 
 # Maximum time a CLI client waits for an existing daemon socket to accept a
 # connection before failing instead of hanging.
@@ -1123,6 +1138,7 @@ func DefaultGlobalConfig() *GlobalConfig {
 		Agents:               []types.AgentName{types.AgentAuto},
 		CITimeout:            DefaultCITimeout,
 		StepQuietWarning:     DefaultStepQuietWarning,
+		StepStallTimeout:     DefaultStepStallTimeout,
 		DaemonConnectTimeout: DefaultDaemonConnectTimeout,
 		LogLevel:             "info",
 		SessionReuse:         true,
@@ -1192,6 +1208,13 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 		if d > 0 {
 			cfg.StepQuietWarning = d
 		}
+	}
+	if raw.StepStallTimeout != "" {
+		d, err := parsePositiveDuration("step_stall_timeout", raw.StepStallTimeout)
+		if err != nil {
+			return nil, err
+		}
+		cfg.StepStallTimeout = d
 	}
 	if raw.DaemonConnectTimeout != "" {
 		d, err := parsePositiveDuration("daemon_connect_timeout", raw.DaemonConnectTimeout)
@@ -1658,6 +1681,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		AgentArgsOverride:    global.AgentArgsOverride,
 		CITimeout:            global.CITimeout,
 		StepQuietWarning:     global.StepQuietWarning,
+		StepStallTimeout:     global.StepStallTimeout,
 		LogLevel:             global.LogLevel,
 		SessionReuse:         global.SessionReuse,
 		Commands:             repo.Commands,

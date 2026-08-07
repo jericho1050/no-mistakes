@@ -163,7 +163,10 @@ Run the pipeline and decide on its findings as they come up:
    `auto-fix 1/3`, or `fix 2`. If `last_activity` is prefixed with
    `quiet`, no step log or native-agent lifecycle activity has arrived for
    longer than `step_quiet_warning`. Treat that as a liveness clue, not as
-   permission to cancel, rerun, or edit the worktree yourself.
+   permission to cancel, rerun, or edit the worktree yourself. If the daemon
+   reports a step-stall failure, read its diagnostic: `step_stall_timeout` is a
+   separate completion-handoff backstop for an exited or never-observed agent,
+   and the run is failed for retry rather than left `running` indefinitely.
 2. If the output contains a `gate:` object, the pipeline is waiting on you.
    Read its `findings` table. Each finding has an `id`, `severity`,
    `file`, `description`, and an `action` that tells you how the

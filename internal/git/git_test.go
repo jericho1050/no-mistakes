@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -73,6 +74,41 @@ func TestRun(t *testing.T) {
 	}
 	if out != "" {
 		t.Fatalf("expected clean status, got: %q", out)
+	}
+}
+
+// TestRunReturnsWhenGitLeaderLeavesAnInheritedPipeHolder reproduces the
+// daemon stall at the git boundary: git exits and has completed the operation,
+// but a descendant still owns stdout. os/exec's Output waits for that pipe
+// forever unless the command group is cleaned up on the normal exit path.
+func TestRunReturnsWhenGitLeaderLeavesAnInheritedPipeHolder(t *testing.T) {
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\nprintf 'git done\\n'\nsleep 30 &\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	type result struct {
+		out string
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		out, err := Run(context.Background(), t.TempDir(), "status")
+		resultCh <- result{out: out, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("Run failed: %v", got.err)
+		}
+		if got.out != "git done" {
+			t.Fatalf("Run output = %q, want %q", got.out, "git done")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run hung after fake git leader exited while a descendant held stdout")
 	}
 }
 
