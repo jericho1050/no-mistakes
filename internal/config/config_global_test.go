@@ -26,6 +26,9 @@ func TestLoadGlobal_Defaults(t *testing.T) {
 	if cfg.StepQuietWarning != DefaultStepQuietWarning {
 		t.Errorf("step_quiet_warning = %v, want %v", cfg.StepQuietWarning, DefaultStepQuietWarning)
 	}
+	if cfg.StepStallTimeout != DefaultStepStallTimeout {
+		t.Errorf("step_stall_timeout = %v, want %v", cfg.StepStallTimeout, DefaultStepStallTimeout)
+	}
 	if cfg.DaemonConnectTimeout != DefaultDaemonConnectTimeout {
 		t.Errorf("daemon_connect_timeout = %v, want %v", cfg.DaemonConnectTimeout, DefaultDaemonConnectTimeout)
 	}
@@ -52,6 +55,7 @@ func TestEnsureDefaultGlobalConfig_CreatesFile(t *testing.T) {
 		"agent: auto",
 		"ci_timeout:",
 		"step_quiet_warning:",
+		"step_stall_timeout:",
 		"daemon_connect_timeout:",
 		"log_level: info",
 		"# agent_path_override:",
@@ -83,6 +87,9 @@ func TestEnsureDefaultGlobalConfig_CreatedConfigIsLoadable(t *testing.T) {
 	if cfg.StepQuietWarning != DefaultStepQuietWarning {
 		t.Errorf("step_quiet_warning = %v, want %v", cfg.StepQuietWarning, DefaultStepQuietWarning)
 	}
+	if cfg.StepStallTimeout != DefaultStepStallTimeout {
+		t.Errorf("step_stall_timeout = %v, want %v", cfg.StepStallTimeout, DefaultStepStallTimeout)
+	}
 	if cfg.DaemonConnectTimeout != DefaultDaemonConnectTimeout {
 		t.Errorf("daemon_connect_timeout = %v, want %v", cfg.DaemonConnectTimeout, DefaultDaemonConnectTimeout)
 	}
@@ -104,6 +111,37 @@ func TestLoadGlobal_StepQuietWarning(t *testing.T) {
 	}
 	if cfg.StepQuietWarning != 90*time.Second {
 		t.Fatalf("step_quiet_warning = %v, want 90s", cfg.StepQuietWarning)
+	}
+}
+
+func TestLoadGlobal_StepStallTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("step_stall_timeout: 90s\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadGlobal(path)
+	if err != nil {
+		t.Fatalf("LoadGlobal: %v", err)
+	}
+	if cfg.StepStallTimeout != 90*time.Second {
+		t.Fatalf("step_stall_timeout = %v, want 90s", cfg.StepStallTimeout)
+	}
+}
+
+func TestLoadGlobal_InvalidStepStallTimeout(t *testing.T) {
+	for _, value := range []string{"not-a-duration", "0s", "-1s"} {
+		t.Run(value, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			if err := os.WriteFile(path, []byte("step_stall_timeout: "+value+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadGlobal(path); err == nil {
+				t.Fatal("expected invalid step_stall_timeout to fail closed")
+			}
+		})
 	}
 }
 
@@ -417,6 +455,13 @@ func TestDefaultConfigYAML_MatchesGoDefaults(t *testing.T) {
 	}
 	if d != DefaultCITimeout {
 		t.Errorf("YAML ci_timeout = %v, Go default = %v", d, DefaultCITimeout)
+	}
+	d, err = time.ParseDuration(raw.StepStallTimeout)
+	if err != nil {
+		t.Fatalf("YAML step_stall_timeout %q is not a valid duration: %v", raw.StepStallTimeout, err)
+	}
+	if d != DefaultStepStallTimeout {
+		t.Errorf("YAML step_stall_timeout = %v, Go default = %v", d, DefaultStepStallTimeout)
 	}
 	d, err = time.ParseDuration(raw.DaemonConnectTimeout)
 	if err != nil {

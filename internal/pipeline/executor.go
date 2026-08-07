@@ -96,6 +96,13 @@ func NewExecutor(database *db.DB, p *paths.Paths, cfg *config.Config, ag agent.A
 	}
 }
 
+func (e *Executor) stepStallTimeout() time.Duration {
+	if e.config != nil && e.config.StepStallTimeout > 0 {
+		return e.config.StepStallTimeout
+	}
+	return config.DefaultStepStallTimeout
+}
+
 // SetGateReconcileTimings overrides the interval between approval-gate
 // reconciliation checks and the deadline for each check. It is primarily used
 // by deterministic tests and specialized embeddings; non-positive values keep
@@ -226,6 +233,165 @@ type stepExecutionState struct {
 	autoFixAttempts  int
 	executionMS      int64
 	currentRoundID   string
+}
+
+// stepWatchdog tracks the handoff between a step's child process and the
+// executor. A quiet step is not enough to trigger it: an agent that is still
+// reported as running is allowed to be quiet indefinitely. The watchdog only
+// fires after the configured bound when the agent has reported exit, or when
+// no native agent process ever became observable. The latter covers the
+// empty-agent_pid failure mode while still making the diagnostic explicit.
+type stepWatchdog struct {
+	stepName string
+	timeout  time.Duration
+	cancel   context.CancelCauseFunc
+
+	mu             sync.Mutex
+	active         bool
+	lastActivityAt time.Time
+	agentInvoked   bool
+	agentStarted   bool
+	agentExited    bool
+	agentPID       int
+	stallErr       error
+	stop           chan struct{}
+	stopped        chan struct{}
+	stopOnce       sync.Once
+}
+
+func newStepWatchdog(stepName string, timeout time.Duration, cancel context.CancelCauseFunc) *stepWatchdog {
+	w := &stepWatchdog{
+		stepName: stepName,
+		timeout:  timeout,
+		cancel:   cancel,
+		stop:     make(chan struct{}),
+		stopped:  make(chan struct{}),
+	}
+	go w.watch()
+	return w
+}
+
+func (w *stepWatchdog) watch() {
+	defer close(w.stopped)
+	interval := w.timeout / 10
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	if interval > time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			w.check()
+		case <-w.stop:
+			return
+		}
+	}
+}
+
+func (w *stepWatchdog) check() {
+	w.mu.Lock()
+	if !w.active || w.stallErr != nil || w.lastActivityAt.IsZero() {
+		w.mu.Unlock()
+		return
+	}
+	idle := time.Since(w.lastActivityAt)
+	if idle < w.timeout || !w.agentInvoked {
+		w.mu.Unlock()
+		return
+	}
+	processState := "not observed"
+	if w.agentStarted {
+		if w.agentExited {
+			processState = "exited"
+		} else if w.agentPID > 0 && !processAlive(w.agentPID) {
+			processState = "exited without lifecycle event"
+		} else {
+			// A live native process is allowed to be quiet; this watchdog is
+			// specifically for the completion handoff, not a work-duration
+			// timeout.
+			w.mu.Unlock()
+			return
+		}
+	}
+	err := fmt.Errorf("step %s stalled: executor did not receive completion after %s; last activity was %s ago; agent process %s", w.stepName, formatWatchdogDuration(w.timeout), formatWatchdogDuration(idle), processState)
+	w.stallErr = err
+	w.mu.Unlock()
+	slog.Error("pipeline step stalled", "step", w.stepName, "timeout", formatWatchdogDuration(w.timeout), "idle", formatWatchdogDuration(idle), "agent_process", processState)
+	w.cancel(err)
+}
+
+func formatWatchdogDuration(d time.Duration) string {
+	return d.Round(time.Millisecond).String()
+}
+
+func (w *stepWatchdog) beginRound() {
+	w.mu.Lock()
+	w.active = true
+	w.lastActivityAt = time.Now()
+	w.agentInvoked = false
+	w.agentStarted = false
+	w.agentExited = false
+	w.agentPID = 0
+	w.mu.Unlock()
+}
+
+func (w *stepWatchdog) endRound() {
+	w.mu.Lock()
+	w.active = false
+	w.mu.Unlock()
+}
+
+func (w *stepWatchdog) activity() {
+	w.mu.Lock()
+	if w.active {
+		w.lastActivityAt = time.Now()
+	}
+	w.mu.Unlock()
+}
+
+func (w *stepWatchdog) invocation() {
+	w.mu.Lock()
+	if w.active {
+		w.agentInvoked = true
+		w.lastActivityAt = time.Now()
+	}
+	w.mu.Unlock()
+}
+
+func (w *stepWatchdog) lifecycle(event agent.LifecycleEvent) {
+	w.mu.Lock()
+	if w.active {
+		w.lastActivityAt = time.Now()
+		switch event.Phase {
+		case agent.LifecyclePhaseStart:
+			w.agentStarted = true
+			w.agentExited = false
+			w.agentPID = event.PID
+		case agent.LifecyclePhaseExit:
+			w.agentStarted = true
+			w.agentExited = true
+		case agent.LifecyclePhaseRetry:
+			w.agentStarted = true
+			w.agentExited = false
+			w.agentPID = 0
+		}
+	}
+	w.mu.Unlock()
+}
+
+func (w *stepWatchdog) stallError() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.stallErr
+}
+
+func (w *stepWatchdog) close() {
+	w.stopOnce.Do(func() { close(w.stop) })
+	<-w.stopped
 }
 
 type recoveredGate struct {
@@ -562,6 +728,10 @@ func recoveredLogPath(step *db.StepResult) string {
 func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult, run *db.Run, repo *db.Repo, workDir, logDir string, state stepExecutionState) (bool, error) {
 	stepName := step.Name()
 	logPath := filepath.Join(logDir, string(stepName)+".log")
+	stepCtx, cancelStep := context.WithCancelCause(ctx)
+	watchdog := newStepWatchdog(string(stepName), e.stepStallTimeout(), cancelStep)
+	defer watchdog.close()
+	defer cancelStep(nil)
 	finalExitCode := 0
 	autoFixLimit := 0
 	if e.config != nil {
@@ -607,6 +777,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	lastLogActivityAt := time.Time{}
 	touchLogActivity := func(text string, force bool) {
 		if activity := stepActivityFromLog(text); activity != "" {
+			watchdog.activity()
 			now := time.Now()
 			if !force && !lastLogActivityAt.IsZero() && now.Sub(lastLogActivityAt) < stepActivityThrottleInterval {
 				return
@@ -639,6 +810,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		touchLogActivity(text, strings.Contains(text, "\n"))
 	}
 	onAgentLifecycle := func(event agent.LifecycleEvent) {
+		watchdog.lifecycle(event)
 		text := event.Message
 		if text == "" {
 			text = fmt.Sprintf("%s %s", event.Agent, event.Phase)
@@ -668,7 +840,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	stepAgent := e.agent
 	if stepAgent != nil {
 		stepAgent = &gateStepBoundaryAgent{inner: stepAgent, phase: stepName}
-		stepAgent = &lifecycleAgent{inner: stepAgent, onLifecycle: onAgentLifecycle}
+		stepAgent = &lifecycleAgent{inner: stepAgent, onInvocation: watchdog.invocation, onLifecycle: onAgentLifecycle}
 		stepAgent = &perfRecordingAgent{
 			inner:    stepAgent,
 			db:       e.db,
@@ -689,7 +861,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		e.emitCIReadinessEvent(run, repo, ready, declaredNoCI)
 	}
 	sctx := &StepContext{
-		Ctx:              ctx,
+		Ctx:              stepCtx,
 		Run:              run,
 		Repo:             repo,
 		WorkDir:          workDir,
@@ -723,7 +895,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 
 	// Execute with possible fix loop
 	for {
+		watchdog.beginRound()
 		outcome, err := step.Execute(sctx)
+		watchdog.endRound()
+		if stallErr := watchdog.stallError(); stallErr != nil {
+			err = stallErr
+		}
 		roundNum++
 		roundDuration := time.Since(phaseStart).Milliseconds()
 		if err != nil {
@@ -1022,8 +1199,9 @@ func (a *gateStepBoundaryAgent) NeutralizesGateInstructions() bool {
 }
 
 type lifecycleAgent struct {
-	inner       agent.Agent
-	onLifecycle func(agent.LifecycleEvent)
+	inner        agent.Agent
+	onInvocation func()
+	onLifecycle  func(agent.LifecycleEvent)
 }
 
 func (a *lifecycleAgent) Name() string {
@@ -1031,6 +1209,9 @@ func (a *lifecycleAgent) Name() string {
 }
 
 func (a *lifecycleAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+	if a.onInvocation != nil {
+		a.onInvocation()
+	}
 	previous := opts.OnLifecycle
 	opts.OnLifecycle = func(event agent.LifecycleEvent) {
 		if previous != nil {

@@ -11,8 +11,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -173,6 +175,133 @@ func (lifecycleTestAgent) Run(_ context.Context, opts agent.RunOpts) (*agent.Res
 }
 
 func (lifecycleTestAgent) Close() error { return nil }
+
+type exitedButHungAgent struct{}
+
+func (exitedButHungAgent) Name() string { return "codex" }
+
+func (exitedButHungAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+	if opts.OnLifecycle != nil {
+		opts.OnLifecycle(agent.LifecycleEvent{Agent: "codex", Phase: agent.LifecyclePhaseStart, PID: 4242, Message: "codex started pid=4242"})
+		opts.OnLifecycle(agent.LifecycleEvent{Agent: "codex", Phase: agent.LifecyclePhaseExit, PID: 4242, Message: "codex exited pid=4242 status=success"})
+	}
+	<-ctx.Done()
+	return nil, context.Cause(ctx)
+}
+
+func (exitedButHungAgent) Close() error { return nil }
+
+type quietRunningAgent struct{}
+
+func (quietRunningAgent) Name() string { return "codex" }
+
+func (quietRunningAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+	if opts.OnLifecycle != nil {
+		opts.OnLifecycle(agent.LifecycleEvent{Agent: "codex", Phase: agent.LifecyclePhaseStart, PID: os.Getpid(), Message: "codex started"})
+	}
+	<-ctx.Done()
+	return nil, context.Cause(ctx)
+}
+
+func (quietRunningAgent) Close() error { return nil }
+
+type neverObservedAgent struct{}
+
+func (neverObservedAgent) Name() string { return "codex" }
+
+func (neverObservedAgent) Run(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
+	<-ctx.Done()
+	return nil, context.Cause(ctx)
+}
+
+func (neverObservedAgent) Close() error { return nil }
+
+// TestExecutor_FailsWhenAgentIsNeverObserved keeps the empty-agent_pid failure
+// mode visible: a running step cannot remain nonterminal forever when no child
+// process ever reported itself to the daemon.
+func TestExecutor_FailsWhenAgentIsNeverObserved(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			_, err := sctx.Agent.Run(sctx.Ctx, agent.RunOpts{Prompt: "work", CWD: sctx.WorkDir})
+			return nil, err
+		},
+	}
+	cfg := &config.Config{StepStallTimeout: 50 * time.Millisecond}
+	exec := NewExecutor(database, p, cfg, neverObservedAgent{}, []Step{step}, nil)
+
+	if err := exec.Execute(context.Background(), run, repo, workDir); err == nil || !strings.Contains(err.Error(), "agent process not observed") {
+		t.Fatalf("Execute() error = %v, want missing-agent diagnostic", err)
+	}
+}
+
+// TestExecutor_DoesNotFailAQuietRunningAgent proves the watchdog is not a
+// general quiet-step timeout: an agent that still reports running is allowed
+// to continue until its own context ends.
+func TestExecutor_DoesNotFailAQuietRunningAgent(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			_, err := sctx.Agent.Run(sctx.Ctx, agent.RunOpts{Prompt: "work", CWD: sctx.WorkDir})
+			return nil, err
+		},
+	}
+	cfg := &config.Config{StepStallTimeout: 20 * time.Millisecond}
+	exec := NewExecutor(database, p, cfg, quietRunningAgent{}, []Step{step}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := exec.Execute(ctx, run, repo, workDir)
+	if err == nil || strings.Contains(err.Error(), "stalled:") {
+		t.Fatalf("Execute() error = %v, want context cancellation without watchdog failure", err)
+	}
+}
+
+// TestExecutor_FailsWhenAgentExitedButStepDidNotReturn reproduces the lost
+// completion signal: the child has emitted its exit lifecycle event, but the
+// step remains running instead of advancing to terminal step state.
+func TestExecutor_FailsWhenAgentExitedButStepDidNotReturn(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			_, err := sctx.Agent.Run(sctx.Ctx, agent.RunOpts{Prompt: "work", CWD: sctx.WorkDir})
+			return nil, err
+		},
+	}
+	cfg := &config.Config{StepStallTimeout: 50 * time.Millisecond}
+	exec := NewExecutor(database, p, cfg, exitedButHungAgent{}, []Step{step}, nil)
+
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "agent process exited") {
+			t.Fatalf("Execute() error = %v, want exited-agent stall diagnostic", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Execute() did not fail a step after its agent exited")
+	}
+	got, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.Status != types.RunFailed {
+		t.Fatalf("run status = %q, want failed", got.Status)
+	}
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatalf("get steps: %v", err)
+	}
+	if steps[0].Status != types.StepStatusFailed {
+		t.Fatalf("step status = %q, want failed", steps[0].Status)
+	}
+}
 
 func TestExecutor_AgentLifecycleLoggedAndClearsPID(t *testing.T) {
 	database, p, run, repo := setupTest(t)
