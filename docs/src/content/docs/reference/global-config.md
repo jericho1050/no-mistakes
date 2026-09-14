@@ -702,15 +702,14 @@ Optional regular expression for extracting the value exposed as `{{.Branch}}` to
 | Type | `string` regular expression |
 | Default | Unset, so `{{.Branch}}` is the normalized full branch name |
 
-The expression is limited to 1,024 bytes, must be valid UTF-8, must exclude the same control and unsafe Unicode format characters as `commit.fix_message`, and must compile with at least one capture group.
-Without [`commit.branch_replacement`](#commitbranch_replacement), the first capture group becomes `{{.Branch}}`, so `([A-Z]+-[0-9]+)` extracts `PROJ-123` from `feature/PROJ-123-add-widget`.
-A replacement can assemble multiple capture groups into one identifier.
-For example, this global configuration renders `PROJ-123: preserve legacy drafts` from branch `PROJ/123`:
+The expression is limited to 1,024 bytes, must be valid UTF-8, must exclude the same control and unsafe Unicode format characters as `commit.fix_message`, and must compile with exactly one capture group.
+Without [`commit.branch_replacement`](#commitbranch_replacement), that capture group becomes `{{.Branch}}`, so `([A-Z]+-[0-9]+)` extracts `PROJ-123` from `feature/PROJ-123-add-widget`.
+For example, this global configuration renders `EDGE-39250: preserve legacy drafts` from branch `EDGE/39250`:
 
 ```yaml
 commit:
-  branch_pattern: '^([A-Z]+)/([0-9]+)$'
-  branch_replacement: '${1}-${2}'
+  branch_pattern: '^EDGE/([0-9]+)$'
+  branch_replacement: 'EDGE-${1}'
   fix_message: "{{.Branch}}: {{.Summary}}"
 ```
 
@@ -719,19 +718,19 @@ A per-repo [`commit.branch_pattern`](/no-mistakes/reference/repo-config/#commitb
 
 ### commit.branch_replacement
 
-Optional regular-expression replacement expression applied to the first branch-pattern match before its value is exposed as `{{.Branch}}`.
+Optional global-only expression that adds literal text around the branch pattern's capture group before exposing it as `{{.Branch}}`.
 
 | | |
 | --- | --- |
 | Type | `string` replacement expression |
-| Default | Unset, so the first capture group is used unchanged |
+| Default | Unset, so the capture group is used unchanged |
 
-Use `$1`, `${2}`, and so on to insert capture groups, and `$$` for a literal dollar sign.
-The replacement must be configured with `commit.branch_pattern`, which must contain every referenced capture group.
+Use exactly one `${1}` reference to insert the capture group; other dollar syntax is rejected.
+The replacement must be configured with `commit.branch_pattern` in the same global configuration.
 It is limited to 1,024 bytes, must be valid UTF-8, and must exclude the same control and unsafe Unicode format characters as `commit.fix_message`.
-Malformed replacement syntax and references to missing capture groups fail configuration loading with an actionable error.
+Malformed replacement syntax fails configuration loading with an actionable error.
 The expanded identifier is subject to the existing UTF-8, control-character, unsafe-Unicode, and rendered-subject validation.
-A per-repo [`commit.branch_replacement`](/no-mistakes/reference/repo-config/#commitbranch_replacement) value overrides this global setting.
+A repository `commit.branch_pattern` override disables this machine-local replacement so it cannot be applied to a different pattern.
 
 ### intent
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"text/template"
 	"text/template/parse"
@@ -32,8 +31,12 @@ const MaxFixMessageSummaryBytes = 4096
 
 // CommitRaw is the YAML representation of auto-fix commit settings.
 type CommitRaw struct {
-	FixMessage        *string `yaml:"fix_message"`
-	BranchPattern     *string `yaml:"branch_pattern"`
+	FixMessage    *string `yaml:"fix_message"`
+	BranchPattern *string `yaml:"branch_pattern"`
+}
+
+type GlobalCommitRaw struct {
+	CommitRaw         `yaml:",inline"`
 	BranchReplacement *string `yaml:"branch_replacement"`
 }
 
@@ -51,19 +54,8 @@ type fixMessageData struct {
 }
 
 func validateCommitRaw(raw CommitRaw) error {
-	var branchPattern *regexp.Regexp
 	if raw.BranchPattern != nil {
-		var err error
-		branchPattern, err = compileBranchPattern(*raw.BranchPattern)
-		if err != nil {
-			return err
-		}
-	}
-	if raw.BranchReplacement != nil {
-		if raw.BranchPattern == nil {
-			return fmt.Errorf("commit.branch_replacement requires commit.branch_pattern")
-		}
-		if err := validateBranchReplacement(*raw.BranchReplacement, branchPattern); err != nil {
+		if _, err := compileBranchPattern(*raw.BranchPattern); err != nil {
 			return err
 		}
 	}
@@ -77,9 +69,6 @@ func validateCommitRaw(raw CommitRaw) error {
 	if raw.BranchPattern != nil {
 		commit.BranchPattern = *raw.BranchPattern
 	}
-	if raw.BranchReplacement != nil {
-		commit.BranchReplacement = *raw.BranchReplacement
-	}
 	for _, step := range []types.StepName{
 		types.StepReview,
 		types.StepTest,
@@ -91,6 +80,19 @@ func validateCommitRaw(raw CommitRaw) error {
 		}
 	}
 	return nil
+}
+
+func validateGlobalCommitRaw(raw GlobalCommitRaw) error {
+	if err := validateCommitRaw(raw.CommitRaw); err != nil {
+		return err
+	}
+	if raw.BranchReplacement == nil {
+		return nil
+	}
+	if raw.CommitRaw.BranchPattern == nil {
+		return fmt.Errorf("commit.branch_replacement requires commit.branch_pattern")
+	}
+	return validateBranchReplacement(*raw.BranchReplacement)
 }
 
 func compileBranchPattern(pattern string) (*regexp.Regexp, error) {
@@ -110,13 +112,13 @@ func compileBranchPattern(pattern string) (*regexp.Regexp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse commit.branch_pattern: %w", err)
 	}
-	if re.NumSubexp() < 1 {
-		return nil, fmt.Errorf("commit.branch_pattern must contain at least one capture group")
+	if re.NumSubexp() != 1 {
+		return nil, fmt.Errorf("commit.branch_pattern must contain exactly one capture group")
 	}
 	return re, nil
 }
 
-func validateBranchReplacement(replacement string, pattern *regexp.Regexp) error {
+func validateBranchReplacement(replacement string) error {
 	if strings.TrimSpace(replacement) == "" {
 		return fmt.Errorf("commit.branch_replacement must not be empty")
 	}
@@ -129,61 +131,15 @@ func validateBranchReplacement(replacement string, pattern *regexp.Regexp) error
 	if containsUnsafeFixMessageRune(replacement) {
 		return fmt.Errorf("commit.branch_replacement must not contain control or unsafe Unicode format characters or line separators")
 	}
-	captureGroups := 0
-	if pattern != nil {
-		captureGroups = pattern.NumSubexp()
-	}
-	for i := 0; i < len(replacement); {
-		if replacement[i] != '$' {
-			_, size := utf8.DecodeRuneInString(replacement[i:])
-			i += size
-			continue
-		}
-		if i+1 >= len(replacement) {
-			return invalidBranchReplacement()
-		}
-		next := replacement[i+1]
-		if next == '$' {
-			i += 2
-			continue
-		}
-		start := i + 1
-		end := start
-		if next == '{' {
-			start++
-			end = strings.IndexByte(replacement[start:], '}')
-			if end < 0 {
-				return invalidBranchReplacement()
-			}
-			end += start
-			if end == start {
-				return invalidBranchReplacement()
-			}
-		} else if next >= '0' && next <= '9' {
-			for end < len(replacement) && replacement[end] >= '0' && replacement[end] <= '9' {
-				end++
-			}
-		} else {
-			return invalidBranchReplacement()
-		}
-		group, err := strconv.Atoi(replacement[start:end])
-		if err != nil || group < 1 {
-			return invalidBranchReplacement()
-		}
-		if pattern != nil && group > captureGroups {
-			return fmt.Errorf("commit.branch_replacement references capture group %d, but commit.branch_pattern has only %d capture groups", group, captureGroups)
-		}
-		if next == '{' {
-			i = end + 1
-		} else {
-			i = end
-		}
+	const capture = "${1}"
+	if strings.Count(replacement, capture) != 1 || strings.Contains(strings.Replace(replacement, capture, "", 1), "$") {
+		return invalidBranchReplacement()
 	}
 	return nil
 }
 
 func invalidBranchReplacement() error {
-	return fmt.Errorf("commit.branch_replacement must use $$ for literal dollars or capture references such as $1 or ${1}")
+	return fmt.Errorf("commit.branch_replacement must contain exactly one ${1} capture reference and no other dollar signs")
 }
 
 // RenderFixMessage renders and validates a single-line auto-fix commit subject.
@@ -265,9 +221,8 @@ func (c Commit) renderFixMessage(step types.StepName, summary, branch string, re
 }
 
 // BranchValue returns the branch value exposed to commit and PR title
-// templates. BranchPattern captures one or more groups; without a
-// BranchReplacement, the first group is returned for backwards compatibility.
-// A replacement can assemble the groups, for example ${1}-${2}.
+// templates. BranchPattern, when configured, must capture the identifier in
+// its only capture group. BranchReplacement can add literal text around it.
 func (c Commit) BranchValue(branch string) (string, error) {
 	branch = strings.TrimSpace(strings.TrimPrefix(branch, "refs/heads/"))
 	if c.BranchPattern == "" {
@@ -280,16 +235,16 @@ func (c Commit) BranchValue(branch string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	match := re.FindStringSubmatchIndex(branch)
-	if len(match) < 4 || match[2] < 0 || strings.TrimSpace(branch[match[2]:match[3]]) == "" {
+	match := re.FindStringSubmatch(branch)
+	if len(match) < 2 || strings.TrimSpace(match[1]) == "" {
 		return "", fmt.Errorf("commit.branch_pattern did not find an identifier in branch %q", branch)
 	}
-	value := branch[match[2]:match[3]]
+	value := match[1]
 	if c.BranchReplacement != "" {
-		if err := validateBranchReplacement(c.BranchReplacement, re); err != nil {
+		if err := validateBranchReplacement(c.BranchReplacement); err != nil {
 			return "", err
 		}
-		value = string(re.ExpandString(nil, c.BranchReplacement, branch, match))
+		value = strings.Replace(c.BranchReplacement, "${1}", value, 1)
 	}
 	value = strings.TrimSpace(value)
 	if value == "" {
