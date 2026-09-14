@@ -83,7 +83,8 @@ ci:
 
 commit:
   fix_message: "chore(no-mistakes-{{.Step}}): {{.Summary}}"
-  # branch_pattern: '([A-Z]+-[0-9]+)'
+  # branch_pattern: '^EDGE/([0-9]+)$'
+  # branch_replacement: 'EDGE-${1}'
   # To use the captured identifier in the subject:
   # fix_message: "{{.Branch}}: {{.Summary}}"
 
