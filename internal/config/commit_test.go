@@ -64,6 +64,23 @@ func TestCommitRenderFixMessageForBranch_NoIdentifierFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCommitRenderFixMessageForBranch_ReplacesMultipleCaptures(t *testing.T) {
+	t.Parallel()
+
+	commit := Commit{
+		FixMessage:        "{{.Branch}}: {{.Summary}}",
+		BranchPattern:     `([A-Z]+)/([0-9]+)`,
+		BranchReplacement: "${1}-${2}",
+	}
+	got, err := commit.RenderFixMessageForBranch(types.StepLint, "preserve invariants", "refs/heads/PROJ/123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "PROJ-123: preserve invariants"; got != want {
+		t.Fatalf("RenderFixMessageForBranch() = %q, want %q", got, want)
+	}
+}
+
 func TestCommitRenderFixMessage_DefaultRemainsUnchangedWithBranchPattern(t *testing.T) {
 	t.Parallel()
 
@@ -238,6 +255,21 @@ func TestLoadGlobal_CommitFixMessage(t *testing.T) {
 	}
 }
 
+func TestLoadGlobal_CommitBranchReplacement(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadGlobalFromBytes([]byte("commit:\n  branch_pattern: '^([A-Z]+)/([0-9]+)$'\n  branch_replacement: '${1}-${2}'\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Commit.BranchPattern == nil || *cfg.Commit.BranchPattern != `^([A-Z]+)/([0-9]+)$` {
+		t.Fatalf("commit.branch_pattern = %v, want configured pattern", cfg.Commit.BranchPattern)
+	}
+	if cfg.Commit.BranchReplacement == nil || *cfg.Commit.BranchReplacement != "${1}-${2}" {
+		t.Fatalf("commit.branch_replacement = %v, want configured replacement", cfg.Commit.BranchReplacement)
+	}
+}
+
 func TestLoadGlobal_RejectsInvalidCommitFixMessage(t *testing.T) {
 	tests := map[string]string{
 		"unknown variable":      "commit:\n  fix_message: '{{.Unknown}}'\n",
@@ -293,21 +325,23 @@ func TestLoadRepo_CommitFixMessage(t *testing.T) {
 
 func TestLoadRepo_RejectsInvalidCommitFixMessage(t *testing.T) {
 	tests := map[string]string{
-		"unknown variable":         "commit:\n  fix_message: '{{.Unknown}}'\n",
-		"escape control":           "commit:\n  fix_message: \"chore:\\u001b {{.Summary}}\"\n",
-		"line separator":           "commit:\n  fix_message: \"chore:\\u2028{{.Summary}}\"\n",
-		"bidi isolate":             "commit:\n  fix_message: \"chore:\\u2066{{.Summary}}\"\n",
-		"zero-width space":         "commit:\n  fix_message: \"chore:\\u200b{{.Summary}}\"\n",
-		"invalid branch regex":     "commit:\n  branch_pattern: '[['\n",
-		"missing branch capture":   "commit:\n  branch_pattern: 'PROJ-[0-9]+'\n",
-		"multiple branch captures": "commit:\n  branch_pattern: '([A-Z]+)-([0-9]+)'\n",
+		"unknown variable":                   "commit:\n  fix_message: '{{.Unknown}}'\n",
+		"escape control":                     "commit:\n  fix_message: \"chore:\\u001b {{.Summary}}\"\n",
+		"line separator":                     "commit:\n  fix_message: \"chore:\\u2028{{.Summary}}\"\n",
+		"bidi isolate":                       "commit:\n  fix_message: \"chore:\\u2066{{.Summary}}\"\n",
+		"zero-width space":                   "commit:\n  fix_message: \"chore:\\u200b{{.Summary}}\"\n",
+		"invalid branch regex":               "commit:\n  branch_pattern: '[['\n",
+		"missing branch capture":             "commit:\n  branch_pattern: 'PROJ-[0-9]+'\n",
+		"invalid branch replacement":         "commit:\n  branch_pattern: '([A-Z]+)'\n  branch_replacement: '$2'\n",
+		"malformed branch replacement":       "commit:\n  branch_pattern: '([A-Z]+)'\n  branch_replacement: '${1'\n",
+		"replacement without branch pattern": "commit:\n  branch_replacement: '$1'\n",
 	}
 	for name, data := range tests {
 		name, data := name, data
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := LoadRepoFromBytes([]byte(data)); err == nil {
-				t.Fatal("LoadRepoFromBytes() accepted an invalid commit.fix_message")
+				t.Fatal("LoadRepoFromBytes() accepted an invalid commit configuration")
 			}
 		})
 	}
@@ -337,5 +371,28 @@ func TestMerge_CommitFixMessagePrecedence(t *testing.T) {
 				t.Fatalf("commit.fix_message = %q, want %q", cfg.Commit.FixMessage, tt.want)
 			}
 		})
+	}
+}
+
+func TestMerge_CommitBranchReplacementRepoOverridesGlobal(t *testing.T) {
+	t.Parallel()
+
+	globalPattern := `([A-Z]+)/([0-9]+)`
+	globalReplacement := "${1}-${2}"
+	repoPattern := `([a-z]+)/([0-9]+)`
+	repoReplacement := "${1}_${2}"
+	cfg := Merge(
+		&GlobalConfig{Commit: CommitRaw{BranchPattern: &globalPattern, BranchReplacement: &globalReplacement}},
+		&RepoConfig{Commit: CommitRaw{BranchPattern: &repoPattern, BranchReplacement: &repoReplacement}},
+	)
+	if cfg.Commit.BranchPattern != repoPattern || cfg.Commit.BranchReplacement != repoReplacement {
+		t.Fatalf("repo branch config did not override global: pattern=%q replacement=%q", cfg.Commit.BranchPattern, cfg.Commit.BranchReplacement)
+	}
+	got, err := cfg.Commit.BranchValue("edge/123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "edge_123"; got != want {
+		t.Fatalf("BranchValue() = %q, want %q", got, want)
 	}
 }

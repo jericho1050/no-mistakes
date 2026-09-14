@@ -1102,8 +1102,9 @@ ci:
   revalidate_repairs: false
 
 # Auto-fix commit subject template. Available variables: {{.Step}}, {{.Summary}}, and {{.Branch}}.
-# {{.Branch}} is the normalized branch name, or the only capture group from
+# {{.Branch}} is the normalized branch name, or the first capture group from
 # branch_pattern when configured. A branch pattern with no match fails safely.
+# branch_replacement can assemble multiple capture groups with $1, ${2}, etc.
 # Repo config may override these values.
 # commit:
 #   branch_pattern: '([A-Z]+-[0-9]+)'
@@ -2861,11 +2862,21 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	if global.Commit.BranchPattern != nil {
 		commit.BranchPattern = *global.Commit.BranchPattern
 	}
+	if global.Commit.BranchReplacement != nil {
+		commit.BranchReplacement = *global.Commit.BranchReplacement
+	}
 	if repo.Commit.FixMessage != nil {
 		commit.FixMessage = *repo.Commit.FixMessage
 	}
 	if repo.Commit.BranchPattern != nil {
 		commit.BranchPattern = *repo.Commit.BranchPattern
+		// A repository pattern override starts a new pattern/replacement pair.
+		// Do not apply a global replacement that may reference captures absent
+		// from the repository pattern.
+		commit.BranchReplacement = ""
+	}
+	if repo.Commit.BranchReplacement != nil {
+		commit.BranchReplacement = *repo.Commit.BranchReplacement
 	}
 
 	providers := Providers{}

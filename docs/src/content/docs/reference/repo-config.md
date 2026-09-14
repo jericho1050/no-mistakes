@@ -295,9 +295,10 @@ Configure the title shape no-mistakes applies to newly created and updated pull 
 | Trust | Pushed branch, like other non-executing repository conventions |
 
 The template supports literal text and `{{.Branch}}` and `{{.Title}}` placeholders.
-`{{.Branch}}` is the normalized branch identifier resolved by [`commit.branch_pattern`](#commitbranch_pattern) when one is configured.
+`{{.Branch}}` is the normalized branch identifier resolved by [`commit.branch_pattern`](#commitbranch_pattern) and optionally [`commit.branch_replacement`](#commitbranch_replacement) when configured.
 `{{.Title}}` is the bare concise title text returned by the PR agent, or `update pull request` when ordinary drafting uses its deterministic fallback.
 For example, `title_format: "{{.Branch}}: {{.Title}}"` can render `PROJ-123: add widget` from a matching branch.
+With `branch_pattern: '^([A-Z]+)/([0-9]+)$'` and `branch_replacement: '${1}-${2}'`, it renders `PROJ-123: add widget` from branch `PROJ/123`.
 The format is applied deterministically after drafting; its literal text is not sent to the agent as an instruction.
 
 The format is validated when configuration loads.
@@ -706,10 +707,38 @@ Override the branch-identifier extraction pattern for this repository.
 | Default | Inherits from global config; when unset there, `{{.Branch}}` is the normalized full branch name |
 
 The value follows the [global `commit.branch_pattern` syntax and validation rules](/no-mistakes/reference/global-config/#commitbranch_pattern).
-Its only capture group becomes `{{.Branch}}` in both `commit.fix_message` and `pr.title_format`.
+Without [`commit.branch_replacement`](#commitbranch_replacement), its first capture group becomes `{{.Branch}}` in both `commit.fix_message` and `pr.title_format`.
 For example, `branch_pattern: '([A-Z]+-[0-9]+)'` extracts `PROJ-123` from `feature/PROJ-123-add-widget`.
+To turn slash-separated captures into one identifier, use this configuration:
+
+```yaml
+commit:
+  branch_pattern: '^([A-Z]+)/([0-9]+)$'
+  branch_replacement: '${1}-${2}'
+  fix_message: "{{.Branch}}: {{.Summary}}"
+
+pr:
+  title_format: "{{.Branch}}: {{.Title}}"
+```
+
+This renders `PROJ-123: preserve legacy drafts` for branch `PROJ/123` in both fix commits and pull request titles.
 When either template uses `{{.Branch}}` and the pattern does not find a non-empty identifier, rendering fails safely instead of producing an empty prefix.
 
+This non-executing field is read from the pushed branch without enabling `allow_repo_commands`.
+
+### commit.branch_replacement
+
+Override the global branch-pattern replacement expression for this repository.
+
+| | |
+| --- | --- |
+| Type | `string` replacement expression |
+| Default | Inherits from global config; when unset, the first capture group is used unchanged |
+
+The value follows the [global `commit.branch_replacement` syntax and validation rules](/no-mistakes/reference/global-config/#commitbranch_replacement).
+Use `$1`, `${2}`, and so on to insert capture groups, and `$$` for a literal dollar sign.
+It must be configured with `commit.branch_pattern`, which must contain every referenced capture group.
+Malformed syntax, missing patterns, and references to missing capture groups fail configuration loading.
 This non-executing field is read from the pushed branch without enabling `allow_repo_commands`.
 
 ### intent
