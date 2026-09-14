@@ -132,8 +132,8 @@ func TestGlobalBranchReplacementFixCommitJourney(t *testing.T) {
 	}
 	globalSource := strings.Replace(string(globalData), "  review: 0\n", "  review: 1\n", 1)
 	globalSource += `commit:
-  branch_pattern: '^EDGE/([0-9]+)$'
-  branch_replacement: 'EDGE-${1}'
+  branch_pattern: '^PROJ/([0-9]+)$'
+  branch_replacement: 'PROJ-${1}'
   fix_message: '{{.Branch}}: {{.Summary}}'
 `
 	if err := os.WriteFile(globalConfig, []byte(globalSource), 0o644); err != nil {
@@ -143,7 +143,7 @@ func TestGlobalBranchReplacementFixCommitJourney(t *testing.T) {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 
-	const branch = "EDGE/39250"
+	const branch = "PROJ/123"
 	h.CommitChange(branch, ".no-mistakes.yaml", `ignore_patterns:
   - '*.generated.go'
   - 'vendor/**'
@@ -166,12 +166,12 @@ commit:
 		t.Fatalf("read upstream commit subjects: %v\n%s", err, log)
 	}
 	subjects := strings.Split(strings.TrimSpace(string(log)), "\n")
-	const want = "EDGE-39250: Preserve legacy drafts and batch status invariants"
+	const want = "PROJ-123: Preserve legacy drafts and batch status invariants"
 	if len(subjects) == 0 || subjects[0] != want {
 		t.Fatalf("latest upstream commit subject = %q, want %q (all subjects: %q)", subjects[0], want, subjects)
 	}
 
 	t.Logf("branch pushed through no-mistakes: %s", branch)
-	t.Logf("machine-local replacement: %q", "EDGE-${1}")
+	t.Logf("machine-local replacement: %q", "PROJ-${1}")
 	t.Logf("completed pipeline upstream commit subjects:\n%s", strings.TrimSpace(string(log)))
 }

@@ -782,9 +782,9 @@ func TestPRStep_UsesConfiguredTitleFormat(t *testing.T) {
 	}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
-	sctx.Run.Branch = "refs/heads/EDGE/39250"
-	sctx.Config.Commit.BranchPattern = `^EDGE/([0-9]+)$`
-	sctx.Config.Commit.BranchReplacement = "EDGE-${1}"
+	sctx.Run.Branch = "refs/heads/PROJ/123"
+	sctx.Config.Commit.BranchPattern = `^PROJ/([0-9]+)$`
+	sctx.Config.Commit.BranchReplacement = "PROJ-${1}"
 	sctx.Config.PR.TitleFormat = "{{.Branch}}: {{.Title}}"
 
 	if _, err := (&PRStep{}).Execute(sctx); err != nil {
@@ -794,7 +794,7 @@ func TestPRStep_UsesConfiguredTitleFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logData), "--title EDGE-39250: add widget") {
+	if !strings.Contains(string(logData), "--title PROJ-123: add widget") {
 		t.Fatalf("expected configured PR title, got:\n%s", logData)
 	}
 }

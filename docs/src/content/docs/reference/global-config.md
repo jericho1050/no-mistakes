@@ -83,8 +83,8 @@ ci:
 
 commit:
   fix_message: "chore(no-mistakes-{{.Step}}): {{.Summary}}"
-  # branch_pattern: '^EDGE/([0-9]+)$'
-  # branch_replacement: 'EDGE-${1}'
+  # branch_pattern: '^PROJ/([0-9]+)$'
+  # branch_replacement: 'PROJ-${1}'
   # To use the captured identifier in the subject:
   # fix_message: "{{.Branch}}: {{.Summary}}"
 
@@ -705,12 +705,12 @@ Optional regular expression for extracting the value exposed as `{{.Branch}}` to
 
 The expression is limited to 1,024 bytes, must be valid UTF-8, must exclude the same control and unsafe Unicode format characters as `commit.fix_message`, and must compile with exactly one capture group.
 Without [`commit.branch_replacement`](#commitbranch_replacement), that capture group becomes `{{.Branch}}`, so `([A-Z]+-[0-9]+)` extracts `PROJ-123` from `feature/PROJ-123-add-widget`.
-For example, this global configuration renders `EDGE-39250: preserve legacy drafts` from branch `EDGE/39250`:
+For example, this global configuration renders `PROJ-123: preserve legacy drafts` from branch `PROJ/123`:
 
 ```yaml
 commit:
-  branch_pattern: '^EDGE/([0-9]+)$'
-  branch_replacement: 'EDGE-${1}'
+  branch_pattern: '^PROJ/([0-9]+)$'
+  branch_replacement: 'PROJ-${1}'
   fix_message: "{{.Branch}}: {{.Summary}}"
 ```
 

@@ -69,14 +69,14 @@ func TestCommitRenderFixMessageForBranch_ReplacesCapturedIdentifier(t *testing.T
 
 	commit := Commit{
 		FixMessage:        "{{.Branch}}: {{.Summary}}",
-		BranchPattern:     `^EDGE/([0-9]+)$`,
-		BranchReplacement: "EDGE-${1}",
+		BranchPattern:     `^PROJ/([0-9]+)$`,
+		BranchReplacement: "PROJ-${1}",
 	}
-	got, err := commit.RenderFixMessageForBranch(types.StepLint, "preserve invariants", "refs/heads/EDGE/123")
+	got, err := commit.RenderFixMessageForBranch(types.StepLint, "preserve invariants", "refs/heads/PROJ/123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "EDGE-123: preserve invariants"; got != want {
+	if want := "PROJ-123: preserve invariants"; got != want {
 		t.Fatalf("RenderFixMessageForBranch() = %q, want %q", got, want)
 	}
 }
@@ -258,14 +258,14 @@ func TestLoadGlobal_CommitFixMessage(t *testing.T) {
 func TestLoadGlobal_CommitBranchReplacement(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := LoadGlobalFromBytes([]byte("commit:\n  branch_pattern: '^EDGE/([0-9]+)$'\n  branch_replacement: 'EDGE-${1}'\n"))
+	cfg, err := LoadGlobalFromBytes([]byte("commit:\n  branch_pattern: '^PROJ/([0-9]+)$'\n  branch_replacement: 'PROJ-${1}'\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Commit.BranchPattern == nil || *cfg.Commit.BranchPattern != `^EDGE/([0-9]+)$` {
+	if cfg.Commit.BranchPattern == nil || *cfg.Commit.BranchPattern != `^PROJ/([0-9]+)$` {
 		t.Fatalf("commit.branch_pattern = %v, want configured pattern", cfg.Commit.BranchPattern)
 	}
-	if cfg.Commit.BranchReplacement == nil || *cfg.Commit.BranchReplacement != "EDGE-${1}" {
+	if cfg.Commit.BranchReplacement == nil || *cfg.Commit.BranchReplacement != "PROJ-${1}" {
 		t.Fatalf("commit.branch_replacement = %v, want configured replacement", cfg.Commit.BranchReplacement)
 	}
 }
@@ -288,12 +288,12 @@ func TestLoadGlobal_RejectsInvalidCommitFixMessage(t *testing.T) {
 		"bidi override":                      "commit:\n  fix_message: \"chore:\\u202e{{.Summary}}\"\n",
 		"zero-width space":                   "commit:\n  fix_message: \"chore:\\u200b{{.Summary}}\"\n",
 		"multiple branch captures":           "commit:\n  branch_pattern: '^([A-Z]+)/([0-9]+)$'\n",
-		"unbraced capture reference":         "commit:\n  branch_pattern: '^EDGE/([0-9]+)$'\n  branch_replacement: 'EDGE-$1draft'\n",
-		"malformed capture reference":        "commit:\n  branch_pattern: '^EDGE/([0-9]+)$'\n  branch_replacement: 'EDGE-${1'\n",
-		"wrong capture reference":            "commit:\n  branch_pattern: '^EDGE/([0-9]+)$'\n  branch_replacement: 'EDGE-${2}'\n",
-		"multiple capture references":        "commit:\n  branch_pattern: '^EDGE/([0-9]+)$'\n  branch_replacement: '${1}-${1}'\n",
-		"literal dollar":                     "commit:\n  branch_pattern: '^EDGE/([0-9]+)$'\n  branch_replacement: '$$${1}'\n",
-		"replacement without branch pattern": "commit:\n  branch_replacement: 'EDGE-${1}'\n",
+		"unbraced capture reference":         "commit:\n  branch_pattern: '^PROJ/([0-9]+)$'\n  branch_replacement: 'PROJ-$1draft'\n",
+		"malformed capture reference":        "commit:\n  branch_pattern: '^PROJ/([0-9]+)$'\n  branch_replacement: 'PROJ-${1'\n",
+		"wrong capture reference":            "commit:\n  branch_pattern: '^PROJ/([0-9]+)$'\n  branch_replacement: 'PROJ-${2}'\n",
+		"multiple capture references":        "commit:\n  branch_pattern: '^PROJ/([0-9]+)$'\n  branch_replacement: '${1}-${1}'\n",
+		"literal dollar":                     "commit:\n  branch_pattern: '^PROJ/([0-9]+)$'\n  branch_replacement: '$$${1}'\n",
+		"replacement without branch pattern": "commit:\n  branch_replacement: 'PROJ-${1}'\n",
 	}
 	for name, data := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -382,8 +382,8 @@ func TestMerge_CommitFixMessagePrecedence(t *testing.T) {
 func TestMerge_CommitBranchReplacementIsGlobalOnly(t *testing.T) {
 	t.Parallel()
 
-	globalPattern := `^EDGE/([0-9]+)$`
-	globalReplacement := "EDGE-${1}"
+	globalPattern := `^PROJ/([0-9]+)$`
+	globalReplacement := "PROJ-${1}"
 	repoPattern := `([A-Z]+-[0-9]+)`
 
 	t.Run("global replacement applies", func(t *testing.T) {
@@ -391,11 +391,11 @@ func TestMerge_CommitBranchReplacementIsGlobalOnly(t *testing.T) {
 			&GlobalConfig{Commit: GlobalCommitRaw{CommitRaw: CommitRaw{BranchPattern: &globalPattern}, BranchReplacement: &globalReplacement}},
 			&RepoConfig{},
 		)
-		got, err := cfg.Commit.BranchValue("EDGE/123")
+		got, err := cfg.Commit.BranchValue("PROJ/123")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := "EDGE-123"; got != want {
+		if want := "PROJ-123"; got != want {
 			t.Fatalf("BranchValue() = %q, want %q", got, want)
 		}
 	})
@@ -422,17 +422,17 @@ func TestLoadRepo_CommitBranchReplacementIsInert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	globalPattern := `^EDGE/([0-9]+)$`
-	globalReplacement := "EDGE-${1}"
+	globalPattern := `^PROJ/([0-9]+)$`
+	globalReplacement := "PROJ-${1}"
 	cfg := Merge(
 		&GlobalConfig{Commit: GlobalCommitRaw{CommitRaw: CommitRaw{BranchPattern: &globalPattern}, BranchReplacement: &globalReplacement}},
 		repo,
 	)
-	got, err := cfg.Commit.BranchValue("EDGE/39250")
+	got, err := cfg.Commit.BranchValue("PROJ/123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "EDGE-39250"; got != want {
+	if want := "PROJ-123"; got != want {
 		t.Fatalf("BranchValue() = %q, want %q", got, want)
 	}
 }

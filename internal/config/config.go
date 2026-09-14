@@ -1107,8 +1107,8 @@ ci:
 # Global-only branch_replacement can add literal text around that group with ${1}.
 # Repo config may override fix_message and branch_pattern.
 # commit:
-#   branch_pattern: '^EDGE/([0-9]+)$'
-#   branch_replacement: 'EDGE-${1}'
+#   branch_pattern: '^PROJ/([0-9]+)$'
+#   branch_replacement: 'PROJ-${1}'
 #   fix_message: "no-mistakes({{.Step}}): {{.Summary}}"
 # To use the captured identifier in the subject, replace fix_message with:
 #   fix_message: "{{.Branch}}: {{.Summary}}"

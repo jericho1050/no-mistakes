@@ -238,12 +238,12 @@ func TestCIStep_CommitRepairUsesBranchIdentifier(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
-	sctx.Run.Branch = "refs/heads/EDGE/39250"
+	sctx.Run.Branch = "refs/heads/PROJ/123"
 	sctx.Config.CI.RevalidateRepairs = true
 	sctx.Config.Commit = config.Commit{
 		FixMessage:        "{{.Branch}}: {{.Summary}}",
-		BranchPattern:     `^EDGE/([0-9]+)$`,
-		BranchReplacement: "EDGE-${1}",
+		BranchPattern:     `^PROJ/([0-9]+)$`,
+		BranchReplacement: "PROJ-${1}",
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
@@ -256,7 +256,7 @@ func TestCIStep_CommitRepairUsesBranchIdentifier(t *testing.T) {
 	if !repair.HeadAdvanced {
 		t.Fatal("CI repair did not advance HEAD")
 	}
-	if got, want := lastCommitMessage(t, dir), "EDGE-39250: repair failing checks"; got != want {
+	if got, want := lastCommitMessage(t, dir), "PROJ-123: repair failing checks"; got != want {
 		t.Fatalf("CI repair commit subject = %q, want %q", got, want)
 	}
 }

@@ -87,10 +87,10 @@ func TestPRRenderTitle_UsesReplacedBranchIdentifier(t *testing.T) {
 	t.Parallel()
 
 	commit := Commit{
-		BranchPattern:     `^EDGE/([0-9]+)$`,
-		BranchReplacement: "EDGE-${1}",
+		BranchPattern:     `^PROJ/([0-9]+)$`,
+		BranchReplacement: "PROJ-${1}",
 	}
-	branch, err := commit.BranchValue("EDGE/123")
+	branch, err := commit.BranchValue("PROJ/123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestPRRenderTitle_UsesReplacedBranchIdentifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "EDGE-123: preserve legacy drafts"; got != want {
+	if want := "PROJ-123: preserve legacy drafts"; got != want {
 		t.Fatalf("RenderTitle() = %q, want %q", got, want)
 	}
 }
